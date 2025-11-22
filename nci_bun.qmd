@@ -1,0 +1,332 @@
+---
+title: "NCI and BUN for predicting SAP patients"
+format:
+  docx:
+    fig-dpi: 800
+    fig-align: center
+    fig-format: jpeg
+    fig-height: 5
+    fig-width: 9
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| message: false
+#| warning: false
+
+library(randomForest)
+library(gtsummary)
+library(pROC)
+library(rsample)
+library(ggplot2)
+library(ggsci)
+library(rms)
+library(dcurves)
+library(survival)
+library(tidyverse)
+library(Hmisc)
+library(readxl)
+library(tidymodels)
+library(rpart)
+library(rpart.plot)
+library(janitor)
+library(caret)
+
+train <- read_xlsx("train.xlsx")
+test <- read_xlsx("test.xlsx", sheet = "FILE BAO CAO")
+```
+
+## Process data
+
+```{r}
+train <- train %>% clean_names()
+test <- test %>% clean_names()
+
+## Training dataset
+train <- train %>%
+  mutate(
+    sap = ifelse(mucdonang2==1, 0, 1), #1 Nặng, 0 Không nặng
+    sex = ifelse(gioi=="Nam", "Male", "Female"),
+    pe = ifelse(trandichmangphoi=="có", "Yes", "No"),
+    nci = neutrophilvvx109l * creatininvv,
+    bun = bu_nvv,
+    lv_bisap = ifelse(diem_bisap>=3, ">=3", "<3"),
+    etiology = case_when(
+      nguyennhan == "Rượu" ~ "Alcohol",
+      nguyennhan == "Sỏi mật" ~ "Gallstones",
+      nguyennhan == "Tăng triglycerid" ~ "Triglycerid",
+      TRUE ~ "Unknown"
+    ),
+    hbp = ifelse(tanghuyetap=="có", "Yes", "No"),
+    diabetes = ifelse(daithaoduong=="có", "Yes", "No"),
+    pseudocyst = ifelse(nanggiatuy==1, "Yes", "No"), #7NA
+    necrosis = ifelse(tudichhoaitucaptinh==1, "Yes", "No"),#7NA
+    fluid = ifelse(tudichquanhtuy=="có", "Yes", "No"),
+    necrosis_wall = ifelse(hoaituthanhhoa==2, "No", "Yes"), #7NA
+    mortality = ifelse(ketcuclamsang==1, "Yes", "No")) %>% 
+  rename(age = tuoi,
+         bisap = diem_bisap,
+         lym = lymphocytevvx109l,
+         wbc = bachcauvvx109l,
+         hct = hc_tvv,
+         lipase = lipasevv,
+         neu = neutrophilvvx109l,
+         cre = creatininvv,
+         amylase = amlasevv,
+         tri = trygliceridvv,
+         ctsi = d_iem_ctsi) %>% 
+  select(sap, sex, age, pe, nci, bun, bisap, lv_bisap, etiology, 
+         hbp, diabetes, pseudocyst, necrosis, fluid, necrosis_wall,
+         mortality, lym, wbc, hct, lipase, neu, cre, amylase,
+         tri, ctsi)
+
+## Testing dataset
+test <- test %>% 
+  mutate(
+    sap = ifelse(mucdonang=="NẶNG", 1, 0), #1 Nặng, 0 Không nặng
+    sex = ifelse(gioi=="Nam", "Male", "Female"),
+    pe = case_when(
+      xq_trandichmangphoi %in% c("có", "Có") ~ "Yes",
+      TRUE ~ "No"
+    ),
+    nci = neuvv * cls_creatininvv,
+    bun = cls_bunvv,
+    lv_bisap = ifelse(bisap>=3, ">=3", "<3"),
+    etiology = case_when(
+      nguyennhan == "Rượu" ~ "Alcohol",
+      nguyennhan == "Sỏi" ~ "Gallstones",
+      nguyennhan == "Tăng TG" ~ "Triglycerid",
+      TRUE ~ "Unknown"
+      ),
+    hbp = ifelse(h_tanghuyetap=="Có", "Yes", "No"),
+    diabetes = ifelse(h_daithaoduong=="Có", "Yes", "No"),
+    pseudocyst = ifelse(bctc_nanggiatuy=="Có", "Yes", "No"), 
+    necrosis = ifelse(bctc_tudichhoaitucaptinh=="Có", "Yes", "No"),
+    fluid = ifelse(bctc_tudichquanhtuy=="Có", "Yes", "No"),
+    necrosis_wall = ifelse(bctc_hoaitutthanhhoa=="Có", "Yes", "No"),
+    mortality = ifelse(ketcuc=="xuất viện", "No", "Yes")) %>% 
+  rename(age = tuoi,
+         lym = lymvv,
+         wbc = cls_wbcvv,
+         hct = cls_hct_vv,
+         lipase = cls_lipasevv,
+         neu = neuvv,
+         cre = cls_creatininvv,
+         amylase = cls_amylasevv,
+         tri = cls_triglyceridvv,
+         ctsi = diem_ctsi) %>% 
+  select(sap, sex, age, pe, nci, bun, bisap, lv_bisap, etiology, 
+         hbp, diabetes, pseudocyst, necrosis, fluid, necrosis_wall,
+         mortality, lym, wbc, hct, lipase, neu, cre, amylase,
+         tri, ctsi)
+
+train$dataset <- "Train"
+test$dataset  <- "Test"
+
+df <- full_join(train, test)
+
+cols <- c("sex", "sap", "pe", "bisap", "lv_bisap", "etiology",
+          "hbp", "diabetes", "pseudocyst", "necrosis", "fluid",
+          "necrosis_wall", "mortality", "ctsi")
+df[cols] <- lapply(df[cols], as.factor)
+```
+
+## Descriptive summary
+
+### Whole data
+
+```{r}
+tbl_summary(
+  df,
+  by = sap,
+  include = everything(),
+  missing = "no",
+  digits = c(all_continuous() ~ 1, all_categorical() ~ c(0, 1)),
+  statistic =  list(all_continuous() ~ "{median} ({p25}-{p75})")
+) %>%
+  add_p(
+    pvalue_fun = function(x)
+      style_pvalue(x, digits = 3),
+    test = list(
+      all_continuous() ~ "wilcox.test",
+      all_categorical() ~ "fisher.test"
+    )
+  ) %>%
+  add_overall()
+```
+
+### Training dataset
+
+```{r}
+#| message: false
+#| warning: false
+tbl_train <- tbl_summary(
+  train,
+  by = sap,
+  include = everything(),
+  missing = "no",
+  digits = c(all_continuous() ~ 1, all_categorical() ~ c(0, 1)),
+  statistic =  list(all_continuous() ~ "{median} ({p25}-{p75})")
+) %>%
+  add_p(
+    pvalue_fun = function(x)
+      style_pvalue(x, digits = 3),
+    test = list(
+      all_continuous() ~ "wilcox.test",
+      all_categorical() ~ "fisher.test"
+    )
+  ) %>%
+  add_overall()
+```
+
+### Testing dataset
+
+```{r}
+#| message: false
+#| warning: false
+tbl_test <- tbl_summary(
+  test,
+  by = sap,
+  include = everything(),
+  missing = "no",
+  digits = c(all_continuous() ~ 1, all_categorical() ~ c(0, 1)),
+  statistic =  list(all_continuous() ~ "{median} ({p25}-{p75})")
+) %>%
+  add_p(
+    pvalue_fun = function(x)
+      style_pvalue(x, digits = 3),
+    test = list(
+      all_continuous() ~ "wilcox.test",
+      all_categorical() ~ "fisher.test"
+    )
+  ) %>%
+  add_overall()
+```
+
+```{r}
+tbl_merge(list(tbl_train, tbl_test),
+          tab_spanner = c("Training dataset", "Testing dataset"))
+```
+
+## Distribution plots
+
+```{r}
+df_long <- df %>%
+  pivot_longer(cols = c(nci, bun),
+               names_to = "variable",
+               values_to = "value")
+```
+
+```{r}
+label_vars <- c(
+  nci = "NCI",
+  bun = "BUN"
+)
+
+ggplot(df_long, aes(x = sap, y = value, fill = sap)) +
+  geom_violin(trim = FALSE, alpha = 0.5) +
+  geom_boxplot(width = 0.15, outlier.shape = NA) +
+  facet_grid(variable ~ dataset,
+             scales = "free_y",
+             labeller = labeller(variable = label_vars)) +
+  theme_bw() +
+  labs(x = "Severity of Acute Pancreatitis", 
+       y = "Values", fill = "SAP group") +
+  theme(strip.background = element_rect(fill = "lightblue"),
+        axis.text.x = element_blank(),
+        axis.text.y = element_text(color = "black", 
+                                   size = 10),
+        strip.text = element_text(color = "black",
+                                  size = 10))
+```
+
+## Build models
+
+### Train models
+
+```{r}
+train$sap <- factor(train$sap, levels = c(0,1), 
+                    labels = c("nonsap", "sap"))
+test$sap <- factor(test$sap, levels = c(0,1), 
+                   labels = c("nonsap", "sap"))
+
+## Cross validation
+kfold <- trainControl(method = "cv",
+                      number = 10,
+                      savePredictions = "all",
+                      classProbs = TRUE) 
+
+m1 <- train(sap ~ nci, data = train,
+               method = "glm", family = "binomial",
+               trControl = kfold) ## Logistic regression
+
+m2 <- train(sap ~ bun, data = train, 
+               method = "glm", family = "binomial",
+               trControl = kfold) ## Logistic regression
+
+m3 <- rpart(
+  sap ~ nci + bun,
+  data = train,
+  control = rpart.control(cp = 0.0001, xval = 5)
+) ## Decision tree
+```
+
+### Fit models
+
+```{r}
+m1_prob <- predict(m1, test, type = "prob")
+m1_roc <- roc(test$sap, m1_prob[,2]) ## Logistic regression
+
+m2_prob <- predict(m2, test, type = "prob")
+m2_roc <- roc(test$sap, m2_prob[,2]) ## Logistic regression
+
+## Decision tree
+bestcp <- m3$cptable[which.min(m3$cptable[,"xerror"]), "CP"]
+tree_m3 <- prune(m3, cp = bestcp)
+prp(tree_m3, 
+    faclen=0, 
+    extra=101, 
+    under=TRUE, 
+    cex=0.8,
+    box.palette="auto", 
+    roundint=FALSE, 
+    digits=4)
+
+m3_roc <- predict(tree_m3, test, type="prob")[,2]
+```
+
+### ROC Curve
+
+```{r}
+size_text_roc <- 4
+x_text_roc <- 0.65
+y_text_roc <- 0.25
+roc.list <- list(m1_roc, m2_roc, m3_roc)
+ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE) +
+    annotate("text", x = x_text_roc, y = y_text_roc, size = size_text_roc, hjust = 0, 
+             color = "#1f77b4",
+             label = paste0("NCI = ", sprintf("%.3f", roc_nlr$auc))) +
+    annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
+             color = "#ff7f0e",
+             label = paste0("BUN = ", sprintf("%.3f", roc_crp$auc))) +
+    annotate("text", x = x_text_roc, y = y_text_roc - 0.2, size = size_text_roc, hjust = 0, 
+             color = "#d340a2",
+             label = paste0("NCI + BUN = ", sprintf("%.3f", roc_nlr_crp$auc))) +
+    geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+                 color = "darkgrey", linetype = "dashed", size = 0.8) +  # Đường y=x
+    theme_classic() +
+    theme(text = element_text(size = 14),
+          legend.position = "bottom",
+          legend.title = element_blank()) +
+    scale_color_bmj(name = "Model", 
+labels = c("NCI", "BUN", "NCI + BUN")) +
+    labs(x = "1 - Specificity", y = "Sensitivity") +
+    theme_minimal()
+```
+
+
+
+
