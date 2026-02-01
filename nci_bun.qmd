@@ -34,12 +34,13 @@ library(tidyverse)
 library(Hmisc)
 library(readxl)
 library(tidymodels)
-library(rpart)
-library(rpart.plot)
 library(janitor)
 library(caret)
 library(ggcorrplot)
 library(ggpubr)
+library(fastshap)
+library(shapviz)
+library(patchwork)
 
 train <- read_xlsx("data/train.xlsx")
 test <- read_xlsx("data/test.xlsx", sheet = "data")
@@ -389,78 +390,6 @@ ggcorrplot(corr_matrix,
   labs(x = "", y = "")
 ```
 
-## VIF
-
-```{r}
-vif_val <- vif(m1$finalModel)
-
-vif_df <- data.frame(
-  Variable = names(vif_val),
-  VIF = as.numeric(vif_val)
-)
-
-vif_df <- vif_df %>% 
-  mutate(Variable = case_when(
-    Variable == "bun_clean" ~ "BUN",
-    Variable == "wbc" ~ "WBC",
-    TRUE ~ "CRP"
-  ))
-
-ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +
-  geom_col(width = 0.6, fill = "#4E84C4", alpha = 0.9) + 
-  geom_hline(yintercept = 2, linetype = "dashed", color = "red", size = 0.8) + 
-  coord_flip() + 
-  theme_bw(base_size = 14) + 
-  labs(
-    x = NULL,
-    y = "Variance Inflation Factor (VIF)"
-  ) +
-  theme(
-    panel.grid.major.y = element_blank(),
-    panel.grid.minor = element_blank(),
-    plot.title = element_text(face = "bold", hjust = 0.5),
-    plot.subtitle = element_text(hjust = 0.5, color = "gray30"),
-    axis.text = element_text(color = "black")
-  ) +
-
-  geom_text(aes(label = round(VIF, 2)), hjust = -0.2, size = 4) +
-  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
-```
-
-## SHAP value
-
-```{r}
-X_shap <- train %>% select(bun_clean, wbc, crp) 
-
-pfun <- function(object, newdata) {
-  predict(object, newdata = newdata, type = "prob")[, 2] 
-}
-
-shap_raw <- explain(m1, X = X_shap, pred_wrapper = pfun, nsim = 100)
-
-shp_viz <- shapviz(shap_raw, X = X_shap)
-
-names(shp_viz$X) <- c("BUN", "WBC", "CRP")
-
-colnames(shp_viz$S) <- c("BUN", "WBC", "CRP")
-
-sv_importance(shp_viz, kind = "beeswarm") +
-  theme_bw(base_size = 14) + 
-  scale_color_gradient(low = "#3A0CA3", high = "#F72585", 
-                       name = "Feature Value") + 
-  labs(
-    x = "SHAP values",
-    y = NULL
-  ) +
-  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
-  theme(
-    plot.title = element_text(face = "bold", hjust = 0.5),
-    legend.position = "right",
-    panel.grid.minor = element_blank(),
-    axis.text = element_text(color = "black")
-  )
-```
-
 ## Build models
 
 ### Train models
@@ -569,14 +498,85 @@ roc.test(roc_m1, roc_m3, method="bootstrap", boot.n=1000)
 roc.test(roc_m1, roc_m4, method="bootstrap", boot.n=1000)
 ```
 
-### Cut-off
+## VIF
 
 ```{r}
-# cp_cpr <- cutpointr::cutpointr(data = train, x = cpr, class = sap, metric = cutpointr::youden)
-# cp_cpr$optimal_cutpoint
-# 
-# cp_lym <- cutpointr::cutpointr(data = train, x = lym, class = sap, metric = cutpointr::youden)
-# cp_lym$optimal_cutpoint
+vif_val <- vif(m1$finalModel)
+
+vif_df <- data.frame(
+  Variable = names(vif_val),
+  VIF = as.numeric(vif_val)
+)
+
+vif_df <- vif_df %>% 
+  mutate(Variable = case_when(
+    Variable == "bun_clean" ~ "BUN",
+    Variable == "wbc" ~ "WBC",
+    TRUE ~ "CRP"
+  ))
+
+p1 <- ggplot(vif_df, aes(x = reorder(Variable, VIF), y = VIF)) +
+  geom_col(width = 0.6, fill = "#4E84C4", alpha = 0.9) + 
+  geom_hline(yintercept = 2, linetype = "dashed", color = "red", size = 0.8) + 
+  coord_flip() + 
+  theme_bw(base_size = 14) + 
+  labs(
+    x = NULL,
+    y = "Variance Inflation Factor (VIF)"
+  ) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(hjust = 0.5, color = "gray30"),
+    axis.text = element_text(color = "black")
+  ) +
+
+  geom_text(aes(label = round(VIF, 2)), hjust = -0.2, size = 4) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+
+p1
+```
+
+## SHAP value
+
+```{r}
+X_shap <- train %>% select(bun_clean, wbc, crp) 
+
+pfun <- function(object, newdata) {
+  predict(object, newdata = newdata, type = "prob")[, 2] 
+}
+
+shap_raw <- explain(m1, X = X_shap, pred_wrapper = pfun, nsim = 100)
+
+shp_viz <- shapviz(shap_raw, X = X_shap)
+
+names(shp_viz$X) <- c("BUN", "WBC", "CRP")
+
+colnames(shp_viz$S) <- c("BUN", "WBC", "CRP")
+
+p2 <- sv_importance(shp_viz, kind = "beeswarm") +
+  theme_bw(base_size = 14) + 
+  scale_color_gradient(low = "#3A0CA3", high = "#F72585", 
+                       name = "Feature Value") + 
+  labs(
+    x = "SHAP values",
+    y = NULL
+  ) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") + 
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "right",
+    panel.grid.minor = element_blank(),
+    axis.text = element_text(color = "black")
+  )
+
+p2
+```
+
+```{r}
+p1 / p2 + 
+  plot_annotation(tag_levels = 'A')
 ```
 
 ## Calculate metrics
@@ -592,50 +592,6 @@ ci.coords(roc_m2, x = "best", ret = rets,
 
 ci.coords(roc_m3, x = "best", ret = rets,
           best.policy = "random")
-```
-
-## Odds Ratios
-
-```{r}
-# train$sap <- ifelse(train$sap=="nonsap", 0, 1)
-# 
-# dff <- train[,c("cpr", "lym", "sap", "pe", 
-#                "necrosis", "diabetes", "wbc")]
-# 
-# dff <- dff %>% 
-#   mutate(
-#     cpr_or = ifelse(cpr>=cp_cpr$optimal_cutpoint,1,0),
-#     lym_or = ifelse(lym>=cp_lym$optimal_cutpoint,1,0),
-#     combine_or = factor(
-#   case_when(
-#     lym >= 0.62 ~ 1,
-#     lym < 0.62 & cpr < 0.51 ~ 2,
-#     lym < 0.62 & cpr >= 0.51  ~ 3
-#   )
-# )
-#   )
-# 
-# dff <- dff %>% mutate(across(.cols = -c(cpr, lym, wbc), .fns = as.factor))
-# 
-# # Univariate 
-# tbl_uvregression(dff[,-c(1,2,4,5,6,7)],
-#                  method = glm,
-#                  y = sap,
-#                  method.args = list(family = binomial),
-#                  exponentiate = TRUE)
-# 
-# ## Multivariate - adjusted for pe + necrosis + diabetes + wbc
-# glm(sap ~ cpr_or + pe + necrosis + diabetes + wbc,
-#     data = dff, family = binomial(link = "logit")) %>%
-#   tbl_regression(exponentiate = TRUE)
-# 
-# glm(sap ~ lym_or + pe + necrosis + diabetes + wbc,
-#     data = dff, family = binomial(link = "logit")) %>%
-#   tbl_regression(exponentiate = TRUE)
-# 
-# glm(sap ~ combine_or + pe + necrosis + diabetes + wbc,
-#     data = dff, family = binomial(link = "logit")) %>%
-#   tbl_regression(exponentiate = TRUE)
 ```
 
 ## Nomogram
@@ -661,7 +617,7 @@ nom <- nomogram(fit_final,
                 funlabel = "Risk of Severe Acute Pancreatitis")
 
 # Vẽ lại
-plot(nom, xfrac=.35, cex.axis=0.8, lwd=2)
+plot(nom, xfrac = 0.5, cex.axis = 0.8, lwd = 2)
 ```
 
 ## Calibration combined model
