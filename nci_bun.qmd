@@ -432,7 +432,7 @@ m5 <- train(sap ~ bisap, data = train,
                 trControl = kfold)
 ```
 
-### Fit models
+  ### Fit models
 
 ```{r}
 get_prob <- function(model, data) {
@@ -790,7 +790,95 @@ plot(dca_obj) +
     theme_classic()
 ```
 
+## Bootstrap to validate final model
 
+```{r}
+# Dùng lrm để fit lại mô hình y chang caret nhưng để dùng được hàm validate
+fit_rms <- lrm(sap ~ bun_clean + wbc + crp, data = train, x = TRUE, y = TRUE)
+
+# Chạy bootstrap 1000 lần trên tập train
+set.seed(123)
+val_boot <- validate(fit_rms, method = "boot", B = 1000)
+
+dxy_orig <- val_boot["Dxy", "index.orig"]
+dxy_corrected <- val_boot["Dxy", "index.corrected"]
+
+auc_orig <- (dxy_orig / 2) + 0.5
+auc_corrected <- (dxy_corrected / 2) + 0.5
+
+cat("AUC crude:", round(auc_orig, 4), "\n")
+cat("AUC adjuted by Bootstrap 1000 steps:", round(auc_corrected, 4), "\n")
+cat("Optimism:", round(auc_orig - auc_corrected, 4), "\n")
+```
+
+```{r}
+# --- RÚT RUỘT THỦ CÔNG ĐỂ TẠO DATA FRAME SẠCH ---
+cal_df <- data.frame(
+  predy = as.numeric(cal_boot[, "predy"]),
+  calibrated_orig = as.numeric(cal_boot[, "calibrated.orig"]),
+  calibrated_corrected = as.numeric(cal_boot[, "calibrated.corrected"])
+)
+
+# Lấy xác suất dự đoán trên tập train để vẽ vạch phân bố (Rug plot)
+pred_train <- predict(fit_rms, type = "fitted")
+rug_df <- data.frame(pred = pred_train)
+
+# --- VẼ BIỂU ĐỒ BẰNG GGPLOT2 ---
+p_cal_boot <- ggplot(cal_df, aes(x = predy)) +
+  
+  # 1. Đường tham chiếu lý tưởng (y = x)
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey50", linewidth = 1) +
+  
+  # 2. Đường Apparent (chưa hiệu chỉnh) - Đã đổi tên biến thành calibrated_orig
+  geom_line(aes(y = calibrated_orig, color = "Crude"), linewidth = 1.2) +
+  
+  # 3. Đường Bias-corrected - Đã đổi tên biến thành calibrated_corrected
+  geom_line(aes(y = calibrated_corrected, color = "Adjusted"), linewidth = 1.2, linetype = "twodash") +
+  
+  # 4. Rug plot thể hiện phân bố xác suất của bệnh nhân
+  geom_rug(data = rug_df, aes(x = pred), inherit.aes = FALSE, 
+           sides = "b", alpha = 0.5, color = "#2c3e50") +
+  
+  # Tùy chỉnh màu sắc
+  scale_color_manual(name = "Curves",
+                     values = c("Crude" = "#E46726", 
+                                "Adjusted" = "#2E86C1")) +
+  
+  # Canh chỉnh trục X và Y
+  scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+
+  labs(x = "Predicted Probability of SAP",
+       y = "Observed Proportion of SAP",
+       title = "Adjusted by Bootstrap 1000 times") +
+  
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5, size = 16),
+    legend.position = c(0.75, 0.2), 
+    legend.background = element_rect(fill = "white", color = "black", linewidth = 0.3),
+    legend.title = element_text(face = "bold"),
+    axis.text = element_text(color = "black", size = 12),
+    axis.title = element_text(face = "bold", size = 14),
+    panel.grid.minor = element_blank() 
+  )
+
+p_cal_boot
+```
+
+## Convert to logistic model language
+
+```{r}
+coefs <- coef(m1$finalModel)
+
+beta_0   <- round(coefs["(Intercept)"], 4)
+beta_bun <- round(coefs["bun_clean"], 4)
+beta_wbc <- round(coefs["wbc"], 4)
+beta_crp <- round(coefs["crp"], 4)
+
+cat(sprintf("Logit(P) = %.4f + (%.4f * BUN) + (%.4f * WBC) + (%.4f * CRP)", 
+            beta_0, beta_bun, beta_wbc, beta_crp))
+```
 
 
 
