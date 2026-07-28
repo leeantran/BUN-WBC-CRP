@@ -639,32 +639,65 @@ validation_plot <- val.prob(p = pred_probs_test,
 ### ROC Curves
 
 ```{r}
+# 1. Tính toán dải tin cậy (CI band) cho 2 đường ROC
+# Dùng seq(0, 1, 0.01) để lấy 101 điểm specificity, giúp dải CI mượt mà ôm sát đường cong
+ciobj_m1 <- ci.se(roc_m1, specificities = seq(0, 1, 0.01))
+ciobj_m5 <- ci.se(roc_m5, specificities = seq(0, 1, 0.01))
+
+# 2. Chuyển đổi thành data frame để đưa vào ggplot
+# Lưu ý: Vì dùng legacy.axes = TRUE, trục X là (1 - Specificity), nên tọa độ x cũng phải đảo lại
+dat_ci_m1 <- data.frame(
+  x = 1 - as.numeric(rownames(ciobj_m1)),
+  lower = ciobj_m1[, 1],
+  upper = ciobj_m1[, 3]
+)
+
+dat_ci_m5 <- data.frame(
+  x = 1 - as.numeric(rownames(ciobj_m5)),
+  lower = ciobj_m5[, 1],
+  upper = ciobj_m5[, 3]
+)
+
+# 3. Thông số text
 size_text_roc <- 4
-x_text_roc <- 0.65
+x_text_roc <- 0.45 # Dịch sang trái một chút xíu để lấy chỗ ghi thêm 95% CI
 y_text_roc <- 0.25
+
+# 4. Vẽ biểu đồ chính
 roc.list <- list(roc_m1, roc_m5)
-ggroc(roc.list, aes = "color", size = 1, linetype = "solid", legacy.axes = TRUE) +
-    annotate("text", x = x_text_roc, y = y_text_roc, size = size_text_roc, hjust = 0, 
-             color = "#1f77b4",
-             label = paste0("BUN + WBC + CRP = ", sprintf("%.3f", roc_m1$auc))) +
-    annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
-             color = "#ff7f0e",
-             label = paste0("BISAP = ", sprintf("%.3f", roc_m5$auc))) +
-    geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
-                 color = "darkgrey", linetype = "dashed", size = 0.8) +  # Đường y=x
-    theme_classic() +
-    theme(text = element_text(size = 16),
-          legend.position = "none",
-          legend.title = element_blank(),
-          legend.text = element_text(size = 18,
-                                     color = "black"),
-          axis.text = element_text(size = 18,
-                                   color = "black"),
-          axis.title = element_text(size = 20,
-                                   color = "black")) +
-    scale_color_bmj(name = "Models", 
-labels = c("BUN + WBC + CRP", "BISAP")) +
-    labs(x = "1 - Specificity", y = "Sensitivity")
+ggroc(roc.list, aes = "color", linewidth = 1, linetype = "solid", legacy.axes = TRUE) +
+  
+  # Thêm dải CI mờ bằng geom_ribbon (alpha = 0.15 cho nhạt, ko che mất đường chính)
+  geom_ribbon(data = dat_ci_m1, aes(x = x, ymin = lower, ymax = upper), 
+              fill = "#1f77b4", alpha = 0.15, inherit.aes = FALSE) +
+  geom_ribbon(data = dat_ci_m5, aes(x = x, ymin = lower, ymax = upper), 
+              fill = "#ff7f0e", alpha = 0.15, inherit.aes = FALSE) +
+  
+  # Text cho Model BWC (Đã chèn thêm 95% CI)
+  annotate("text", x = x_text_roc, y = y_text_roc, size = size_text_roc, hjust = 0, 
+           color = "#1f77b4",
+           label = paste0("BUN + WBC + CRP = ", sprintf("%.3f", roc_m1$auc), 
+                          " (0.781-0.961)")) +
+  
+  # Text cho Model BISAP (Đã chèn thêm 95% CI)
+  annotate("text", x = x_text_roc, y = y_text_roc - 0.1, size = size_text_roc, hjust = 0, 
+           color = "#ff7f0e",
+           label = paste0("BISAP = ", sprintf("%.3f", roc_m5$auc), 
+                          " (0.850-0.993)")) +
+  
+  # Đường chéo tham chiếu y = x
+  geom_abline(intercept = 0, slope = 1, color = "darkgrey", linetype = "dashed", linewidth = 0.8) +
+  
+  theme_classic() +
+  theme(text = element_text(size = 16),
+        legend.position = "none",
+        legend.title = element_blank(),
+        legend.text = element_text(size = 18, color = "black"),
+        axis.text = element_text(size = 18, color = "black"),
+        axis.title = element_text(size = 20, color = "black")) +
+  
+  scale_color_bmj(name = "Models", labels = c("BUN + WBC + CRP", "BISAP")) +
+  labs(x = "1 - Specificity", y = "Sensitivity")
 ```
 
 ### Roc test
@@ -812,6 +845,10 @@ cat("Optimism:", round(auc_orig - auc_corrected, 4), "\n")
 ```
 
 ```{r}
+# Tính toán dữ liệu Calibration bằng Bootstrap 1000 lần
+set.seed(123)
+cal_boot <- calibrate(fit_rms, method = "boot", B = 1000)
+
 # --- RÚT RUỘT THỦ CÔNG ĐỂ TẠO DATA FRAME SẠCH ---
 cal_df <- data.frame(
   predy = as.numeric(cal_boot[, "predy"]),
@@ -879,9 +916,3 @@ beta_crp <- round(coefs["crp"], 4)
 cat(sprintf("Logit(P) = %.4f + (%.4f * BUN) + (%.4f * WBC) + (%.4f * CRP)", 
             beta_0, beta_bun, beta_wbc, beta_crp))
 ```
-
-
-
-
-
-
