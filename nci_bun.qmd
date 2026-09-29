@@ -204,7 +204,11 @@ df <- df %>%
          cpr = crp/plt,
          ncrp_plt = neu_crp/plt
          )
+```
 
+## Split data
+
+```{r}
 set.seed(123)
 train_index <- createDataPartition(y = df$sap, p = 0.7, list = FALSE)
 
